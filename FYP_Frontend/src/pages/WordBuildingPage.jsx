@@ -394,39 +394,61 @@ export default function WordBuildingPage() {
 
     // ─── Frame prediction ───────────────────────────────────────────────────────
     const onFrame = useCallback(async (dataUrl) => {
-        if (!running || predicting || wordCompleted) return;
-        setPredicting(true);
-        try {
-            const API_URL = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    if (!running || predicting || wordCompleted) return;
+
+    setPredicting(true);
+
+    try {
+        const API_URL =
+            window.location.hostname === "localhost" ||
+            window.location.hostname === "127.0.0.1"
                 ? "http://localhost:8000/api/predict"
                 : "https://edusign-model.onrender.com/api/predict";
 
-            const res = await fetch(API_URL, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ image: dataUrl, target: targetChar, mode: "quiz" }),
-            });
+        const res = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                image: dataUrl,
+                target: targetChar,
+                mode: "quiz",
+            }),
+        });
 
-            if (res.ok) {
-                const data = await res.json();
+        if (res.ok) {
+            const data = await res.json();
+
+            // 🔵 ONLY count attempt if a hand is detected
+            if (data.hand_detected) {
+
                 setAttempts((prev) => prev + 1);
+
                 if (data.label === targetChar && data.confidence > 0.6) {
+
                     setCorrectCount((prev) => prev + 1);
+
                     const newStreak = streak + 1;
                     const newScore = score + 10;
+
                     setStreak(newStreak);
                     setScore(newScore);
+
                     await nextLetter(newScore, newStreak);
+
                 } else {
                     setStreak(0);
                 }
+
             }
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setPredicting(false);
         }
-    }, [running, predicting, wordCompleted, targetChar, nextLetter, streak, score]);
+
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setPredicting(false);
+    }
+
+}, [running, predicting, wordCompleted, targetChar, nextLetter, streak, score]);
 
     // ─── Render ─────────────────────────────────────────────────────────────────
     return (

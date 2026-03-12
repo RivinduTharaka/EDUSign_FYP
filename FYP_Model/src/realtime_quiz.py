@@ -9,7 +9,7 @@ from mediapipe.tasks.python import vision as mp_vision
 import tensorflow as tf
 
 # ── paths ──────────────────────────────────────────────────────────────────
-PROJECT_ROOT   = "D:\FinalModelCopy\FYP_Model"
+PROJECT_ROOT   = "D:\EDUSign_FYP\FYP_Model"
 MODEL_PATH     = os.path.join(PROJECT_ROOT, "models", "sign_cnn.h5")
 LABELS_PATH    = os.path.join(PROJECT_ROOT, "models", "labels.npy")
 MP_MODEL_PATH  = os.path.join(PROJECT_ROOT, "models", "hand_landmarker.task")
