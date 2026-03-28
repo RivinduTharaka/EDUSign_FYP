@@ -9,7 +9,7 @@ from mediapipe.tasks.python import vision as mp_vision
 import tensorflow as tf
 
 # ── paths ──────────────────────────────────────────────────────────────────
-PROJECT_ROOT   = "D:\EDUSign_FYP\FYP_Model"
+PROJECT_ROOT   = r"D:\EDUSign_FYP\FYP_Model"
 MODEL_PATH     = os.path.join(PROJECT_ROOT, "models", "sign_cnn.h5")
 LABELS_PATH    = os.path.join(PROJECT_ROOT, "models", "labels.npy")
 MP_MODEL_PATH  = os.path.join(PROJECT_ROOT, "models", "hand_landmarker.task")
@@ -39,16 +39,13 @@ def draw_landmarks(frame, hand_landmarks_list):
         for x, y in pts:
             cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)
 
-# ── mediapipe hand landmarker (Tasks API, LIVE_STREAM mode) ────────────────
+# ── mediapipe hand landmarker ──────────────────────────────────────────────
 _latest_result = None
 
 def _callback(result: mp_vision.HandLandmarkerResult,
                output_image: mp.Image, timestamp_ms: int):
     global _latest_result
-    try:
-        _latest_result = result
-    except Exception as e:
-        print(f"[CALLBACK ERROR] {e}")
+    _latest_result = result
 
 options = mp_vision.HandLandmarkerOptions(
     base_options=mp_python.BaseOptions(model_asset_path=MP_MODEL_PATH),
@@ -74,14 +71,17 @@ target_label   = random.choice(CLASSES)
 score_correct  = 0
 score_total    = 0
 last_check     = 0.0
-CHECK_INTERVAL = 1.0   # seconds
+CHECK_INTERVAL = 1.0
 
-# ── webcam main loop ───────────────────────────────────────────────────────
-cap = cv2.VideoCapture(1)  # index 1 = built-in MacBook camera (index 0 is Continuity Camera, unreliable)
+# ── response time storage ──────────────────────────────────────────────────
+response_times = []
+
+# ── webcam setup ───────────────────────────────────────────────────────────
+cap = cv2.VideoCapture(0)
+
 if not cap.isOpened():
-    raise RuntimeError("Camera not accessible. Check System Settings → Privacy → Camera.")
+    raise RuntimeError("Camera not accessible")
 
-# Give camera time to warm up on macOS
 import time as _time
 _time.sleep(1.0)
 
@@ -92,68 +92,155 @@ failed_reads = 0
 MAX_FAILED_READS = 10
 
 while True:
+
     ret, frame = cap.read()
     if not ret:
         failed_reads += 1
-        print(f"[WARN] Failed to read frame ({failed_reads}/{MAX_FAILED_READS})")
         if failed_reads >= MAX_FAILED_READS:
-            print("[ERROR] Too many failed reads — camera disconnected or dropped.")
             break
         _time.sleep(0.05)
         continue
-    failed_reads = 0  # reset on success
 
-    frame     = cv2.flip(frame, 1)
-    rgb       = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    failed_reads = 0
 
-    timestamp_ms += 33          # ~30 fps
+    frame = cv2.flip(frame, 1)
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb
+    )
+
+    timestamp_ms += 33
     detector.detect_async(mp_image, timestamp_ms)
 
-    # draw landmarks
     if _latest_result and _latest_result.hand_landmarks:
         draw_landmarks(frame, _latest_result.hand_landmarks)
 
-    # prediction
-    pred_label = "-"
-    pred_conf  = 0.0
-    vec = extract_landmarks(_latest_result)
-    if vec is not None:
-        probs      = model.predict(vec.reshape(1, 63), verbose=0)[0]
-        idx        = int(np.argmax(probs))
-        pred_label = CLASSES[idx]
-        pred_conf  = float(probs[idx])
+    # ── prediction + response time ─────────────────────────────────────────
 
-    # quiz evaluation
-    now      = time.time()
+    pred_label = "-"
+    pred_conf = 0.0
+    vec = extract_landmarks(_latest_result)
+
+    if vec is not None:
+
+        start_time = time.time()
+
+        probs = model.predict(vec.reshape(1, 63), verbose=0)[0]
+
+        idx = int(np.argmax(probs))
+        pred_label = CLASSES[idx]
+        pred_conf = float(probs[idx])
+
+        end_time = time.time()
+
+        response_time_ms = (end_time - start_time) * 1000
+        response_times.append(response_time_ms)
+
+    # ── quiz evaluation ───────────────────────────────────────────────────
+
+    now = time.time()
     feedback = "Show the sign"
+
     if vec is not None and now - last_check >= CHECK_INTERVAL:
+
         score_total += 1
+
         if pred_label == target_label:
             score_correct += 1
             feedback = "CORRECT!"
         else:
             feedback = "WRONG"
+
         last_check = now
 
     acc = score_correct / score_total if score_total else 0.0
 
-    # HUD
-    fb_color = (0, 255, 80) if feedback == "CORRECT!" else (0, 100, 255)
-    cv2.putText(frame, f"TARGET: {target_label}",                    (10, 35),  cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,255), 2)
-    cv2.putText(frame, f"PRED:   {pred_label}  ({pred_conf:.2f})",   (10, 75),  cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,255), 2)
-    cv2.putText(frame, feedback,                                      (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.9, fb_color, 2)
-    cv2.putText(frame, f"ACCURACY: {acc:.2f}  ({score_correct}/{score_total})", (10, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.75,(255,255,255), 2)
-    cv2.putText(frame, "'n' new sign | 'q' quit",                    (10, frame.shape[0]-15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180,180,180), 1)
+    # ── HUD ───────────────────────────────────────────────────────────────
+
+    fb_color = (0,255,80) if feedback == "CORRECT!" else (0,100,255)
+
+    cv2.putText(frame,
+        f"TARGET: {target_label}",
+        (10,35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255,255,255),
+        2
+    )
+
+    cv2.putText(frame,
+        f"PRED: {pred_label} ({pred_conf:.2f})",
+        (10,75),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (255,255,255),
+        2
+    )
+
+    cv2.putText(frame,
+        feedback,
+        (10,115),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        fb_color,
+        2
+    )
+
+    cv2.putText(frame,
+        f"ACCURACY: {acc:.2f} ({score_correct}/{score_total})",
+        (10,155),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.75,
+        (255,255,255),
+        2
+    )
+
+    if response_times:
+
+        cv2.putText(
+            frame,
+            f"RESP TIME: {response_times[-1]:.2f} ms",
+            (10,195),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            (255,255,255),
+            2
+        )
+
+    cv2.putText(
+        frame,
+        "'n' new sign | 'q' quit",
+        (10, frame.shape[0]-15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (180,180,180),
+        1
+    )
 
     cv2.imshow("EDUSign - Real-Time Quiz", frame)
 
     key = cv2.waitKey(1) & 0xFF
+
     if key == ord('q'):
         break
+
     elif key == ord('n'):
         target_label = random.choice(CLASSES)
-        last_check   = 0.0
+        last_check = 0.0
+
+# ── after exit calculate statistics ───────────────────────────────────────
+
+if response_times:
+
+    avg_time = sum(response_times) / len(response_times)
+
+    print("\nResponse Time Statistics")
+    print("Samples:", len(response_times))
+    print("Average:", round(avg_time,2), "ms")
+    print("Min:", round(min(response_times),2), "ms")
+    print("Max:", round(max(response_times),2), "ms")
 
 detector.close()
 cap.release()
